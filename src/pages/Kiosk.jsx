@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { db } from "../firebase";
-import { collection, onSnapshot, doc, getDoc, addDoc, UpdateDoc, serverTimestamp } from "firebase/firestore";
+import { collection, onSnapshot, doc, getDoc, addDoc, updateDoc, serverTimestamp } from "firebase/firestore";
 
 export default function Kiosk() {
   const [leaders, setLeaders] = useState([]);

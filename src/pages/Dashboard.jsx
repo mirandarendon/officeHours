@@ -1,27 +1,38 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { db } from "../firebase";
-import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { collection, onSnapshot } from "firebase/firestore";
 
 export default function Dashboard() {
-  const [msg, setMsg] = useState("");
+  const [activeLeaders, setActiveLeaders] = useState([]);
 
-  async function testWrite() {
-    setMsg("");
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, "leaders"), (snapshot) => {
+      const active = snapshot.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((l) => l.isActive);
 
-    // This writes a simple doc at: test/ping
-    await setDoc(doc(db, "test", "ping"), {
-      message: "hello firestore",
-      createdAt: serverTimestamp(),
+      active.sort((a, b) => (a.role || "").localeCompare(b.role || ""));
+      setActiveLeaders(active);
     });
 
-    setMsg("Wrote to Firestore ✅");
-  }
+    return () => unsub();
+  }, []);
 
   return (
     <div style={{ padding: 24 }}>
-      <h1>Dashboard</h1>
-      <button onClick={testWrite}>Test Firestore Write</button>
-      {msg && <p>{msg}</p>}
+      <h1>Who’s In Office</h1>
+
+      {activeLeaders.length === 0 ? (
+        <p>No one is currently in the office.</p>
+      ) : (
+        <ul>
+          {activeLeaders.map((l) => (
+            <li key={l.id} style={{ fontSize: 18, marginBottom: 8 }}>
+              {l.role || l.id}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

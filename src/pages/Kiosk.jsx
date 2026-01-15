@@ -73,7 +73,7 @@ export default function Kiosk() {
 
   return (
     <div style={{ padding: 24, maxWidth: 900 }}>
-      <h1>Kiosk</h1>
+      <h1>Office Hours Check In</h1>
       <p>Tap your position.</p>
 
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 12 }}>

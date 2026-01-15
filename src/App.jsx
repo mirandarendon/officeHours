@@ -8,7 +8,7 @@ function App() {
     <BrowserRouter>
       <div style={{ padding: 24 }}>
         <nav style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          <Link to="/kiosk">Kiosk</Link>
+          <Link to="/kiosk">Check in</Link>
           <Link to="/dashboard">Dashboard</Link>
         </nav>
 

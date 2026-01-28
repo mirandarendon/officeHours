@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
-import { collection, doc, onSnapshot, query, where, Timestamp } from "firebase/firestore";
+import { collection, doc, onSnapshot, query, where, Timestamp, getDocs, getDoc, updateDoc } from "firebase/firestore";
 
 function startOfDay(date = new Date()) {
   const d = new Date(date);
@@ -35,14 +35,61 @@ function minutesToNice(mins) {
   return `${rem}m`;
 }
 
+function startOfToday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+async function autoCloseAtMidnight() {
+  const midnight = startOfToday();
+  const midnightTs = Timestamp.fromDate(midnight);
+
+  const activeLeadersSnap = await getDocs(query(collection(db, "leaders"), where("isActive", "==", true)));
+
+  for (const leaderDoc of activeLeadersSnap.docs) {
+    const leaderId = leaderDoc.id;
+    const leader = leaderDoc.data();
+    if (!leader.currentSessionId) continue;
+
+    const sessionRef = doc(db, "sessions", leader.currentSessionId);
+    const sessionSnap = await getDoc(sessionRef);
+    if (!sessionSnap.exists()) continue;
+
+    const session = sessionSnap.data();
+    const ci = session.checkInTime?.toDate?.();
+    if (!ci) continue;
+
+    if (session.checkOutTime) continue;
+    if (ci >= midnight) continue;
+
+    const mins = Math.max(0, Math.round((midnight.getTime() - ci.getTime()) / 60000));
+
+    await updateDoc(sessionRef, {
+      checkOutTime: midnightTs,
+      durationMinutes: mins,
+      autoClosed: true,
+      excludeFromTotals: true,
+    });
+
+    await updateDoc(doc(db, "leaders", leaderId), {
+      isActive: false,
+      currentSessionId: null,
+    });
+  }
+}
+
 export default function Dashboard() {
   const [leaders, setLeaders] = useState([]); // all leaders
   const [activeSessions, setActiveSessions] = useState({}); // leaderId -> { checkInTime }
   const [sessionsThisWeek, setSessionsThisWeek] = useState([]); // list of sessions since week start
   const [now, setNow] = useState(Date.now());
 
-  // Keep per-leader session listeners so we can unsubscribe cleanly
   const activeSessionUnsubsRef = useRef({});
+
+  useEffect(() => {
+    autoCloseAtMidnight().catch(console.error);
+  }, []);
 
   // Tick every second so "in office" durations update live
   useEffect(() => {
@@ -54,7 +101,7 @@ export default function Dashboard() {
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "leaders"), (snapshot) => {
       const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
-      rows.sort((a, b) => (a.role || "").localeCompare(b.role || ""));
+      rows.sort((a, b) => (a.order ?? 9999) - (b.order ?? 9999) || (a.role || "").localeCompare(b.role || ""));
       setLeaders(rows);
     });
 
@@ -65,7 +112,6 @@ export default function Dashboard() {
   useEffect(() => {
     const active = leaders.filter((l) => l.isActive && l.currentSessionId);
 
-    // Unsubscribe sessions that are no longer active
     const keep = new Set(active.map((l) => l.id));
     for (const leaderId of Object.keys(activeSessionUnsubsRef.current)) {
       if (!keep.has(leaderId)) {
@@ -79,7 +125,6 @@ export default function Dashboard() {
       }
     }
 
-    // Subscribe to currently active sessions
     for (const l of active) {
       if (activeSessionUnsubsRef.current[l.id]) continue;
 
@@ -100,7 +145,6 @@ export default function Dashboard() {
       activeSessionUnsubsRef.current[l.id] = unsub;
     }
 
-    // cleanup on unmount
     return () => {
       for (const leaderId of Object.keys(activeSessionUnsubsRef.current)) {
         activeSessionUnsubsRef.current[leaderId]?.();
@@ -125,30 +169,37 @@ export default function Dashboard() {
   // 4) Compute totals per leader (today + week)
   const totalsByLeader = useMemo(() => {
     const todayStartMs = startOfDay(new Date()).getTime();
-    const map = {}; // leaderId -> { todayMinutes, weekMinutes }
+    const map = {};
 
     for (const s of sessionsThisWeek) {
       const leaderId = s.leaderId;
       if (!leaderId) continue;
 
+      if (s.excludeFromTotals) continue;
+      if (!s.checkOutTime) continue;
+
       const ci = s.checkInTime?.toDate?.();
       if (!ci) continue;
 
-      const co = s.checkOutTime?.toDate?.() || new Date(now);
-      const durMs = Math.max(0, co.getTime() - ci.getTime());
-      const durMin = durMs / 60000;
+      let durMin;
+      if (typeof s.durationMinutes === "number") {
+        durMin = s.durationMinutes;
+      } else {
+        const co = s.checkOutTime.toDate();
+        const durMs = Math.max(0, co.getTime() - ci.getTime());
+        durMin = durMs / 60000;
+      }
 
       if (!map[leaderId]) map[leaderId] = { todayMinutes: 0, weekMinutes: 0 };
       map[leaderId].weekMinutes += durMin;
 
-      // Count toward "today" if the session started today
       if (ci.getTime() >= todayStartMs) {
         map[leaderId].todayMinutes += durMin;
       }
     }
 
     return map;
-  }, [sessionsThisWeek, now]);
+  }, [sessionsThisWeek]);
 
   const activeLeaders = leaders.filter((l) => l.isActive);
 
@@ -156,7 +207,7 @@ export default function Dashboard() {
     <div style={{ padding: 24, maxWidth: 1000 }}>
       <h1>Dashboard</h1>
 
-      {/* Section 1: Who is in office right now */}
+      {/* section 1 who is currently in the office */}
       <div style={{ marginTop: 20, padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>
         <h2 style={{ marginTop: 0 }}>In Office Right Now</h2>
 
@@ -186,7 +237,7 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Section 2: Totals for all leaders */}
+      {/* section 2 totals for all leaders */}
       <div style={{ marginTop: 20, padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>
         <h2 style={{ marginTop: 0 }}>Totals</h2>
         <p style={{ marginTop: 0, opacity: 0.85 }}>

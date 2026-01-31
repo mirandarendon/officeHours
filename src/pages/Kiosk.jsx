@@ -54,18 +54,17 @@ export default function Kiosk() {
     autoCloseAtMidnight().catch(console.error);
   }, []);
 
-  // Live load leaders from Firestore
   useEffect(() => {
     const unsub = onSnapshot(collection(db, "leaders"), (snapshot) => {
       const rows = snapshot.docs.map((d) => ({
-        id: d.id, // doc id like "OA"
+        id: d.id,
         ...d.data(),
       }));
       rows.sort((a, b) => (a.order ?? 9999) - (b.order ?? 9999) || (a.role || "").localeCompare(b.role || ""));
       setLeaders(rows);
     });
 
-    return () => unsub(); // cleanup listener when you leave the page
+    return () => unsub();
   }, []);
 
   async function clockIn(id) {
@@ -92,7 +91,6 @@ export default function Kiosk() {
       currentSessionId: sessionRef.id,
     });
 
-    setMsg(`${id} clocked in ✅`);
   }
 
   async function clockOut(id) {
@@ -130,52 +128,117 @@ export default function Kiosk() {
       currentSessionId: null,
     });
 
-    setMsg(`${id} clocked out ✅ (${durationMinutes} min)`);
   }
 
+  const activeLeaders = leaders.filter((l) => l.isActive);
+
   return (
-    <div style={{ padding: 24, maxWidth: 900 }}>
-      <h1>Office Hours Check In</h1>
-      <p>Tap your position.</p>
+    <div style={{ padding: 24, textAlign: "center", background: "var(--bg)", minHeight: "100vh", color: "var(--text)" }}>
+      <div style={{ maxWidth: 1600, margin: "0 auto" }}>
+      
+      <h1 style={{ marginTop: 0 }}>Office Hours Check In</h1>
 
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 12 }}>
-        {leaders.map((l) => (
-          <div
-            key={l.id}
-            style={{
-              border: "1px solid #ccc",
-              borderRadius: 12,
-              padding: 16,
-              minWidth: 220,
-            }}
-          >
-            <div style={{ fontSize: 18, fontWeight: 700 }}>
-              {l.role || l.id}
-            </div>
-            <div style={{ marginTop: 6, opacity: 0.85 }}>
-              Status: {l.isActive ? "In office" : "Out"}
-            </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 16, marginTop: 12, alignItems: "start" }}>
+        {/* left: buttons */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(5, 1fr)",
+            gap: 12,
+          }}
+        >
+          {leaders.map((l) => (
+            <div
+              key={l.id}
+              style={{
+                border: "1px solid var(--border)",
+                background: "var(--panel)",
+                borderRadius: 12,
+                padding: 16,
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+                minHeight: 100,
+              }}
+            >
+              <div>
+                <div style={{ fontSize: 18, fontWeight: 700, minHeight: 30 }}>
+                  {l.role || l.id}
+                </div>
+                
+              </div>
 
-            {l.isActive ? (
-              <button
-                onClick={() => clockOut(l.id)}
-                style={{ marginTop: 12, padding: 12, fontSize: 16, cursor: "pointer" }}
-              >
-                Clock Out
-              </button>
-            ) : (
-              <button
-                onClick={() => clockIn(l.id)}
-                style={{ marginTop: 12, padding: 12, fontSize: 16, cursor: "pointer" }}
-              >
-                Clock In
-              </button>
-            )}
-          </div>
-        ))}
+              {l.isActive ? (
+                <button
+                  onClick={() => clockOut(l.id)}
+                  style={{
+                    marginTop: 12,
+                    padding: 12,
+                    fontSize: 16,
+                    cursor: "pointer",
+                    width: "100%",
+                    background: "transparent",
+                    color: "var(--primary)",
+                    border: "2px solid var(--primary)",
+                    borderRadius: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  Clock Out
+                </button>
+              ) : (
+                <button
+                  onClick={() => clockIn(l.id)}
+                  style={{
+                    marginTop: 12,
+                    padding: 12,
+                    fontSize: 16,
+                    cursor: "pointer",
+                    width: "100%",
+                    background: "var(--primary)",
+                    color: "white",
+                    border: "none",
+                    borderRadius: 10,
+                    fontWeight: 700,
+                  }}
+                >
+                  Clock In
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* right: currently in office */}
+        <div style={{ border: "1px solid var(--border)", background: "var(--panel)", borderRadius: 12, padding: 16 }}>
+          <div style={{ fontWeight: 800, marginBottom: 8, fontSize: 20 }}>Currently In Office</div>
+
+          {activeLeaders.length === 0 ? (
+            <div style={{ color: "var(--muted)" }}>No one is currently in the office.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {activeLeaders.map((l) => (
+                <div
+                  key={l.id}
+                  style={{
+                    border: "1px solid var(--border)",
+                    background: "var(--panel)",
+                    borderRadius: 10,
+                    padding: "10px 10px",
+                    fontWeight: 700,
+                    color: "var(--primary)",
+                  }}
+                >
+                  {l.role || l.id}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
-      {msg && <p style={{ marginTop: 16 }}>{msg}</p>}
+      {msg && <p style={{ marginTop: 16, color: "var(--muted)" }}>{msg}</p>}
+      </div>
     </div>
   );
 }

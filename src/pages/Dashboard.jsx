@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
 import { collection, doc, onSnapshot, query, where, Timestamp, getDocs, getDoc, updateDoc } from "firebase/firestore";
+import DashboardLock from "./DashboardLock";
 
 function startOfDay(date = new Date()) {
   const d = new Date(date);
@@ -84,21 +85,30 @@ export default function Dashboard() {
   const [activeSessions, setActiveSessions] = useState({}); // leaderId -> { checkInTime }
   const [sessionsThisWeek, setSessionsThisWeek] = useState([]); // list of sessions since week start
   const [now, setNow] = useState(Date.now());
+  const [unlocked, setUnlocked] = useState(false);
 
   const activeSessionUnsubsRef = useRef({});
 
   useEffect(() => {
-    autoCloseAtMidnight().catch(console.error);
+    if (localStorage.getItem("dashboardUnlocked") === "1") setUnlocked(true);
   }, []);
+
+  useEffect(() => {
+    if (!unlocked) return;
+    autoCloseAtMidnight().catch(console.error);
+  }, [unlocked]);
 
   // Tick every second so "in office" durations update live
   useEffect(() => {
+    if (!unlocked) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [unlocked]);
 
   // 1) Listen to ALL leaders (for both sections)
   useEffect(() => {
+    if (!unlocked) return;
+
     const unsub = onSnapshot(collection(db, "leaders"), (snapshot) => {
       const rows = snapshot.docs.map((d) => ({ id: d.id, ...d.data() }));
       rows.sort((a, b) => (a.order ?? 9999) - (b.order ?? 9999) || (a.role || "").localeCompare(b.role || ""));
@@ -106,10 +116,12 @@ export default function Dashboard() {
     });
 
     return () => unsub();
-  }, []);
+  }, [unlocked]);
 
   // 2) For leaders who are active, listen to their current session doc (for checkInTime)
   useEffect(() => {
+    if (!unlocked) return;
+
     const active = leaders.filter((l) => l.isActive && l.currentSessionId);
 
     const keep = new Set(active.map((l) => l.id));
@@ -151,10 +163,12 @@ export default function Dashboard() {
       }
       activeSessionUnsubsRef.current = {};
     };
-  }, [leaders]);
+  }, [leaders, unlocked]);
 
   // 3) Listen to all sessions since start of week (for totals)
   useEffect(() => {
+    if (!unlocked) return;
+
     const weekStart = Timestamp.fromDate(startOfWeek(new Date()));
     const q = query(collection(db, "sessions"), where("checkInTime", ">=", weekStart));
 
@@ -164,7 +178,7 @@ export default function Dashboard() {
     });
 
     return () => unsub();
-  }, []);
+  }, [unlocked]);
 
   // 4) Compute totals per leader (today + week)
   const totalsByLeader = useMemo(() => {
@@ -203,9 +217,32 @@ export default function Dashboard() {
 
   const activeLeaders = leaders.filter((l) => l.isActive);
 
+  if (!unlocked) {
+    return <DashboardLock onUnlock={() => setUnlocked(true)} />;
+  }
+
   return (
     <div style={{ padding: 24, maxWidth: 1000 }}>
       <h1>Dashboard</h1>
+
+      <button
+        onClick={() => {
+          localStorage.removeItem("dashboardUnlocked");
+          setUnlocked(false);
+        }}
+        style={{
+          marginBottom: 16,
+          padding: "6px 12px",
+          fontSize: 14,
+          borderRadius: 8,
+          border: "1px solid #ddd",
+          background: "transparent",
+          cursor: "pointer",
+        }}
+      >
+        lock dashboard
+      </button>
+
 
       {/* section 1 who is currently in the office */}
       <div style={{ marginTop: 20, padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>

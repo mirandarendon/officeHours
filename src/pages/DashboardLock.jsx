@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-export default function KioskLock({ onUnlock }) {
+export default function DashboardLock({ onUnlock }) {
   const [pass, setPass] = useState("");
   const [err, setErr] = useState("");
 
@@ -8,8 +8,8 @@ export default function KioskLock({ onUnlock }) {
     e.preventDefault();
     setErr("");
 
-    if (pass === import.meta.env.VITE_KIOSK_PASSCODE) {
-      localStorage.setItem("kioskUnlocked", "1");
+    if (pass === import.meta.env.VITE_DASHBOARD_PASSCODE) {
+      localStorage.setItem("dashboardUnlocked", "1");
       onUnlock();
       return;
     }
@@ -21,7 +21,7 @@ export default function KioskLock({ onUnlock }) {
   return (
     <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
       <div style={{ width: 360, border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
-        <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 10 }}>check in locked</div>
+        <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 10 }}>dashboard locked</div>
 
         <form onSubmit={handleSubmit}>
           <input

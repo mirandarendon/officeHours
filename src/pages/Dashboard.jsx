@@ -264,7 +264,7 @@ export default function Dashboard() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="email"
               autoComplete="username"
-              style={{ width: "100%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid #ddd" }}
+              style={{ width: "94%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid #ddd" }}
             />
             <input
               type="password"
@@ -272,7 +272,7 @@ export default function Dashboard() {
               onChange={(e) => setPass(e.target.value)}
               placeholder="password"
               autoComplete="current-password"
-              style={{ width: "100%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid #ddd", marginTop: 10 }}
+              style={{ width: "94%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid #ddd", marginTop: 10 }}
             />
             <button
               type="submit"

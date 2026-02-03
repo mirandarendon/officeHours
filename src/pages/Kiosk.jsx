@@ -183,7 +183,7 @@ export default function Kiosk() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="email"
               autoComplete="username"
-              style={{ width: "100%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)" }}
+              style={{ width: "94%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)" }}
             />
             <input
               type="password"
@@ -191,7 +191,7 @@ export default function Kiosk() {
               onChange={(e) => setPass(e.target.value)}
               placeholder="password"
               autoComplete="current-password"
-              style={{ width: "100%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid var(--border)", marginTop: 10, background: "var(--bg)", color: "var(--text)" }}
+              style={{ width: "94%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid var(--border)", marginTop: 10, background: "var(--bg)", color: "var(--text)" }}
             />
             <button
               type="submit"

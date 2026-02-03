@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { db } from "../firebase";
 import { collection, onSnapshot, doc, getDoc, getDocs, query, where, addDoc, updateDoc, serverTimestamp, Timestamp } from "firebase/firestore";
+import KioskLock from "./KioskLock";
 
 function startOfToday() {
   const d = new Date();
@@ -49,12 +50,20 @@ async function autoCloseAtMidnight() {
 export default function Kiosk() {
   const [leaders, setLeaders] = useState([]);
   const [msg, setMsg] = useState("");
+  const [unlocked, setUnlocked] = useState(false);
 
   useEffect(() => {
-    autoCloseAtMidnight().catch(console.error);
+    if (localStorage.getItem("kioskUnlocked") === "1") setUnlocked(true);
   }, []);
 
   useEffect(() => {
+    if (!unlocked) return;
+    autoCloseAtMidnight().catch(console.error);
+  }, [unlocked]);
+
+  useEffect(() => {
+    if (!unlocked) return;
+
     const unsub = onSnapshot(collection(db, "leaders"), (snapshot) => {
       const rows = snapshot.docs.map((d) => ({
         id: d.id,
@@ -65,7 +74,7 @@ export default function Kiosk() {
     });
 
     return () => unsub();
-  }, []);
+  }, [unlocked]);
 
   async function clockIn(id) {
     setMsg("");
@@ -128,6 +137,10 @@ export default function Kiosk() {
       currentSessionId: null,
     });
 
+  }
+
+  if (!unlocked) {
+    return <KioskLock onUnlock={() => setUnlocked(true)} />;
   }
 
   const activeLeaders = leaders.filter((l) => l.isActive);

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { db } from "../firebase";
 import { collection, onSnapshot, doc, getDoc, getDocs, query, where, addDoc, updateDoc, serverTimestamp, Timestamp } from "firebase/firestore";
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
 import KioskLock from "./KioskLock";
 
 function startOfToday() {
@@ -52,16 +53,45 @@ export default function Kiosk() {
   const [msg, setMsg] = useState("");
   const [unlocked, setUnlocked] = useState(false);
 
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState(null);
+  const [email, setEmail] = useState("");
+  const [pass, setPass] = useState("");
+  const [authErr, setAuthErr] = useState("");
+
+  useEffect(() => {
+    const auth = getAuth();
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
+    });
+    return () => unsub();
+  }, []);
+
+  async function handleSignIn(e) {
+    e.preventDefault();
+    setAuthErr("");
+
+    try {
+      const auth = getAuth();
+      await signInWithEmailAndPassword(auth, email, pass);
+    } catch (err) {
+      setAuthErr(err?.message || "login failed");
+    }
+  }
+
   useEffect(() => {
     if (localStorage.getItem("kioskUnlocked") === "1") setUnlocked(true);
   }, []);
 
   useEffect(() => {
+    if (!user) return;
     if (!unlocked) return;
     autoCloseAtMidnight().catch(console.error);
-  }, [unlocked]);
+  }, [user, unlocked]);
 
   useEffect(() => {
+    if (!user) return;
     if (!unlocked) return;
 
     const unsub = onSnapshot(collection(db, "leaders"), (snapshot) => {
@@ -74,7 +104,7 @@ export default function Kiosk() {
     });
 
     return () => unsub();
-  }, [unlocked]);
+  }, [user, unlocked]);
 
   async function clockIn(id) {
     setMsg("");
@@ -137,6 +167,44 @@ export default function Kiosk() {
       currentSessionId: null,
     });
 
+  }
+
+  if (!authReady) return null;
+
+  if (!user) {
+    return (
+      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+        <div style={{ width: 360, border: "1px solid var(--border)", borderRadius: 12, padding: 16, background: "var(--panel)", color: "var(--text)" }}>
+          <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 10 }}>kiosk sign in</div>
+
+          <form onSubmit={handleSignIn}>
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="email"
+              autoComplete="username"
+              style={{ width: "100%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)" }}
+            />
+            <input
+              type="password"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              placeholder="password"
+              autoComplete="current-password"
+              style={{ width: "100%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid var(--border)", marginTop: 10, background: "var(--bg)", color: "var(--text)" }}
+            />
+            <button
+              type="submit"
+              style={{ width: "100%", marginTop: 10, padding: 10, fontSize: 16, borderRadius: 10, border: "none", cursor: "pointer", fontWeight: 700, background: "var(--primary)", color: "white" }}
+            >
+              sign in
+            </button>
+          </form>
+
+          {!!authErr && <div style={{ marginTop: 10, color: "var(--muted)" }}>{authErr}</div>}
+        </div>
+      </div>
+    );
   }
 
   if (!unlocked) {

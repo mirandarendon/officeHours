@@ -2,7 +2,6 @@ import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import Kiosk from "./pages/Kiosk.jsx"
 import Dashboard from "./pages/Dashboard.jsx"
 
-import Admin from "./pages/Admin";
 
 
 function App() {
@@ -31,15 +30,6 @@ function App() {
             Dashboard
           </Link>
 
-          <Link
-            to="/admin"
-            style={{
-              color: "var(--primary)",
-              fontWeight: 600,
-            }}
-          >
-            Admin
-          </Link>
         </nav>
 
 
@@ -47,7 +37,6 @@ function App() {
           <Route path="/" element={<Navigate to="/kiosk" replace />} />
           <Route path="/kiosk" element={<Kiosk />} />
           <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/admin" element={<Admin />} />
         </Routes>
       </div>
     </BrowserRouter>

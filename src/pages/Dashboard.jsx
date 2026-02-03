@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
 import { collection, doc, onSnapshot, query, where, Timestamp, getDocs, getDoc, updateDoc } from "firebase/firestore";
+import { getAuth, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
 import DashboardLock from "./DashboardLock";
 
 function startOfDay(date = new Date()) {
@@ -87,26 +88,56 @@ export default function Dashboard() {
   const [now, setNow] = useState(Date.now());
   const [unlocked, setUnlocked] = useState(false);
 
+  const [authReady, setAuthReady] = useState(false);
+  const [user, setUser] = useState(null);
+  const [email, setEmail] = useState("");
+  const [pass, setPass] = useState("");
+  const [authErr, setAuthErr] = useState("");
+
   const activeSessionUnsubsRef = useRef({});
+
+  useEffect(() => {
+    const auth = getAuth();
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthReady(true);
+    });
+    return () => unsub();
+  }, []);
+
+  async function handleSignIn(e) {
+    e.preventDefault();
+    setAuthErr("");
+
+    try {
+      const auth = getAuth();
+      await signInWithEmailAndPassword(auth, email, pass);
+    } catch (err) {
+      setAuthErr(err?.message || "login failed");
+    }
+  }
 
   useEffect(() => {
     if (localStorage.getItem("dashboardUnlocked") === "1") setUnlocked(true);
   }, []);
 
   useEffect(() => {
+    if (!user) return;
     if (!unlocked) return;
     autoCloseAtMidnight().catch(console.error);
-  }, [unlocked]);
+  }, [user, unlocked]);
 
   // Tick every second so "in office" durations update live
   useEffect(() => {
+    if (!user) return;
     if (!unlocked) return;
     const t = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(t);
-  }, [unlocked]);
+  }, [user, unlocked]);
 
   // 1) Listen to ALL leaders (for both sections)
   useEffect(() => {
+    if (!user) return;
     if (!unlocked) return;
 
     const unsub = onSnapshot(collection(db, "leaders"), (snapshot) => {
@@ -116,10 +147,11 @@ export default function Dashboard() {
     });
 
     return () => unsub();
-  }, [unlocked]);
+  }, [user, unlocked]);
 
   // 2) For leaders who are active, listen to their current session doc (for checkInTime)
   useEffect(() => {
+    if (!user) return;
     if (!unlocked) return;
 
     const active = leaders.filter((l) => l.isActive && l.currentSessionId);
@@ -163,10 +195,11 @@ export default function Dashboard() {
       }
       activeSessionUnsubsRef.current = {};
     };
-  }, [leaders, unlocked]);
+  }, [leaders, user, unlocked]);
 
   // 3) Listen to all sessions since start of week (for totals)
   useEffect(() => {
+    if (!user) return;
     if (!unlocked) return;
 
     const weekStart = Timestamp.fromDate(startOfWeek(new Date()));
@@ -178,7 +211,7 @@ export default function Dashboard() {
     });
 
     return () => unsub();
-  }, [unlocked]);
+  }, [user, unlocked]);
 
   // 4) Compute totals per leader (today + week)
   const totalsByLeader = useMemo(() => {
@@ -217,6 +250,44 @@ export default function Dashboard() {
 
   const activeLeaders = leaders.filter((l) => l.isActive);
 
+  if (!authReady) return null;
+
+  if (!user) {
+    return (
+      <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
+        <div style={{ width: 360, border: "1px solid #ddd", borderRadius: 12, padding: 16 }}>
+          <div style={{ fontWeight: 800, fontSize: 20, marginBottom: 10 }}>admin sign in</div>
+
+          <form onSubmit={handleSignIn}>
+            <input
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="email"
+              autoComplete="username"
+              style={{ width: "100%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid #ddd" }}
+            />
+            <input
+              type="password"
+              value={pass}
+              onChange={(e) => setPass(e.target.value)}
+              placeholder="password"
+              autoComplete="current-password"
+              style={{ width: "100%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid #ddd", marginTop: 10 }}
+            />
+            <button
+              type="submit"
+              style={{ width: "100%", marginTop: 10, padding: 10, fontSize: 16, borderRadius: 10, border: "none", cursor: "pointer", fontWeight: 700 }}
+            >
+              sign in
+            </button>
+          </form>
+
+          {!!authErr && <div style={{ marginTop: 10, opacity: 0.85 }}>{authErr}</div>}
+        </div>
+      </div>
+    );
+  }
+
   if (!unlocked) {
     return <DashboardLock onUnlock={() => setUnlocked(true)} />;
   }
@@ -242,7 +313,6 @@ export default function Dashboard() {
       >
         lock dashboard
       </button>
-
 
       {/* section 1 who is currently in the office */}
       <div style={{ marginTop: 20, padding: 16, border: "1px solid #ddd", borderRadius: 12 }}>

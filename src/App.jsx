@@ -1,6 +1,8 @@
 import { BrowserRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import Kiosk from "./pages/Kiosk.jsx"
 import Dashboard from "./pages/Dashboard.jsx"
+import ScheduleBuilder from "./pages/ScheduleBuilder.jsx";
+
 
 
 
@@ -29,6 +31,16 @@ function App() {
           >
             Dashboard
           </Link>
+ 
+          <Link
+            to="/scheduleBuilder"
+            style={{
+              color: "var(--primary)",
+              fontWeight: 600,
+            }}
+          >
+            SchedBuild
+          </Link>
 
         </nav>
 
@@ -37,6 +49,7 @@ function App() {
           <Route path="/" element={<Navigate to="/kiosk" replace />} />
           <Route path="/kiosk" element={<Kiosk />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/scheduleBuilder" element={<ScheduleBuilder />} />
         </Routes>
       </div>
     </BrowserRouter>

@@ -1,16 +1,83 @@
-# React + Vite
+# Student Leader Office Hours Kiosk
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A web-based **check-in kiosk and admin dashboard** built to track student leader office hours in a simple, secure, and scalable way. This project was designed for real-world use in a student government office and deployed as a live website.
 
-Currently, two official plugins are available:
+The system supports a locked-down **public kiosk mode** for check-ins and a separate **password-protected admin dashboard** for managing sessions and viewing data.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## React Compiler
+## ✨ Features
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### Kiosk Mode
 
-## Expanding the ESLint configuration
+* Public-facing check-in page
+* Password-gated kiosk access
+* Designed for tablet / shared-device use
+* Auto session handling (open/close logic)
+* Prevents unauthorized access to admin tools
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### Admin Dashboard
+
+* Secure admin authentication
+* View and manage office hour sessions
+* Firestore-backed data persistence
+* Clean separation from kiosk UI
+
+### General
+
+* Fully deployed web app
+* Uses environment variables for security
+* Modular React component structure
+
+---
+
+## 🛠 Tech Stack
+
+* **Frontend:** React + Vite
+* **Backend / DB:** Firebase Firestore
+* **Hosting:** Firebase Hosting
+* **Auth:** Password-based gating (admin & kiosk)
+
+---
+
+## 🔐 Authentication & Security Overview
+
+Security was a core design consideration for this project because it is intended for use on **shared, public-facing devices**.
+
+Key security decisions include:
+
+* **Separation of concerns:** the public kiosk and admin dashboard are isolated so kiosk users can never navigate into admin functionality
+* **Password-gated kiosk access** to prevent misuse when the device is unattended
+* **Protected admin dashboard** with no public routing exposure
+* **Environment variables** used for Firebase configuration to avoid leaking credentials
+* **Firestore access patterns** designed around least-privilege usage
+
+This mirrors how real-world office kiosks and check-in systems are secured, balancing usability with protection against accidental or malicious access.
+
+---
+
+## 💡 Why I Built This
+
+I built this project to solve a real operational problem: tracking student leader office hours in a way that is **simple for users**, **secure for administrators**, and **cheap to deploy**.
+
+Many existing solutions were either too complex, required paid software, or were not designed for shared devices. I wanted to design something that felt realistic to how kiosks are actually used in offices, where security cannot rely on trusting the user.
+
+This project allowed me to:
+
+* Design a system for **untrusted, public input**
+* Practice applying **security boundaries** in a frontend-heavy application
+* Build and deploy a tool that could realistically be used in a professional setting
+
+It reflects my interest in building practical systems that sit at the intersection of **web development, security, and real-world constraints**.
+
+---
+
+## 💡 Design Goals
+
+* Simple UI for non-technical users
+* Clear separation between public and admin functionality
+* Low-cost deployment (no paid backend services)
+* Easy to extend for future features
+
+
+

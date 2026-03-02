@@ -60,6 +60,54 @@ function minutesToNice(mins) {
   return `${rem}m`;
 }
 
+// ---- export helpers ----
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
+
+function fmtTime(d) {
+  // 00:00pm style
+  let h = d.getHours();
+  const m = d.getMinutes();
+  const ampm = h >= 12 ? "pm" : "am";
+  h = h % 12;
+  if (h === 0) h = 12;
+  return `${pad2(h)}:${pad2(m)}${ampm}`;
+}
+
+function fmtDateLong(d) {
+  return d.toLocaleDateString(undefined, {
+    weekday: "long",
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+}
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function minutesBetween(a, b) {
+  return Math.max(0, (b.getTime() - a.getTime()) / 60000);
+}
+
+function minutesToNiceLong(mins) {
+  const m = Math.max(0, Math.round(mins));
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return `${h}h ${pad2(rem)}m`;
+}
+// ------------------------
+
 function startOfToday() {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -124,6 +172,26 @@ export default function Dashboard() {
 
   const activeSessionUnsubsRef = useRef({});
 
+  // horizontal scroll refs (top + main + bottom)
+  const topHScrollRef = useRef(null);
+  const mainHScrollRef = useRef(null);
+  const bottomHScrollRef = useRef(null);
+  const syncingHScrollRef = useRef(false);
+
+  function syncHScroll(from, left) {
+    if (syncingHScrollRef.current) return;
+    syncingHScrollRef.current = true;
+
+    if (from !== "top" && topHScrollRef.current) topHScrollRef.current.scrollLeft = left;
+    if (from !== "main" && mainHScrollRef.current) mainHScrollRef.current.scrollLeft = left;
+    if (from !== "bottom" && bottomHScrollRef.current)
+      bottomHScrollRef.current.scrollLeft = left;
+
+    requestAnimationFrame(() => {
+      syncingHScrollRef.current = false;
+    });
+  }
+
   const displayedWeekStart = useMemo(() => {
     const base = startOfWeek(new Date());
     return addDays(base, weekOffset * 7);
@@ -155,10 +223,38 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    if (!unlocked) return;
+  if (!user) return;
+  if (!unlocked) return;
+
+  let t = null;
+  let interval = null;
+
+  const schedule = () => {
+    const nowD = new Date();
+    const next = new Date(nowD);
+    next.setHours(24, 0, 0, 0); // next midnight
+    const ms = next.getTime() - nowD.getTime();
+
+    t = setTimeout(async () => {
+      await autoCloseAtMidnight().catch(console.error);
+      schedule(); // schedule the following midnight
+    }, ms);
+  };
+
+  // run once on load + schedule midnight
+  autoCloseAtMidnight().catch(console.error);
+  schedule();
+
+  // optional safety: also run every 5 min in case the tab was asleep
+  interval = setInterval(() => {
     autoCloseAtMidnight().catch(console.error);
-  }, [user, unlocked]);
+  }, 5 * 60 * 1000);
+
+  return () => {
+    if (t) clearTimeout(t);
+    if (interval) clearInterval(interval);
+  };
+}, [user, unlocked]);
 
   // Tick every second so "in office" durations update live
   useEffect(() => {
@@ -289,9 +385,13 @@ export default function Dashboard() {
         const co = s.checkOutTime.toDate();
         durMin = Math.max(0, (co.getTime() - ci.getTime()) / 60000);
       } else {
-        // active (no checkout) count live
-        durMin = Math.max(0, (now - ci.getTime()) / 60000);
-      }
+  // no checkout: only count live time if it started today
+  if (ci.getTime() >= todayStartMs) {
+    durMin = Math.max(0, (now - ci.getTime()) / 60000);
+  } else {
+    durMin = 0;
+  }
+}
 
       if (!map[s.leaderId]) map[s.leaderId] = { weekMinutes: 0, todayMinutes: 0 };
       map[s.leaderId].weekMinutes += durMin;
@@ -382,6 +482,113 @@ export default function Dashboard() {
     return segs;
   }
 
+  function scheduledNiceForLeader(leaderId) {
+    const blocks = (officeHoursByLeader[leaderId] || [])
+      .filter((b) => Number(b.dayOfWeek) >= 1 && Number(b.dayOfWeek) <= 5)
+      .slice()
+      .sort(
+        (a, b) =>
+          Number(a.dayOfWeek) - Number(b.dayOfWeek) ||
+          Number(a.startMinute) - Number(b.startMinute)
+      );
+
+    if (blocks.length === 0) return "None";
+
+    const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+    const toHM = (mins) => {
+      const h24 = Math.floor(mins / 60);
+      const m = mins % 60;
+      const d = new Date();
+      d.setHours(h24, m, 0, 0);
+      return fmtTime(d);
+    };
+
+    return blocks
+      .map((b) => {
+        const dayIdx = Number(b.dayOfWeek) - 1;
+        return `${dayNames[dayIdx]} ${toHM(Number(b.startMinute))}-${toHM(
+          Number(b.endMinute)
+        )}`;
+      })
+      .join(", ");
+  }
+
+  function actualTimesByDayForLeader(leaderId) {
+    const leaderSessions = sessionsByLeader[leaderId] || [];
+
+    const days = [];
+    for (let dayIdx = 0; dayIdx < 5; dayIdx++) {
+      const dayDate = addDays(displayedWeekStart, dayIdx);
+      const dayStart = new Date(dayDate);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(dayDate);
+      dayEnd.setHours(23, 59, 59, 999);
+
+      const entries = [];
+
+      for (const s of leaderSessions) {
+        const start = s.start;
+        const end = s.end || new Date(now);
+
+        if (end.getTime() < dayStart.getTime() || start.getTime() > dayEnd.getTime()) continue;
+
+        const segStart = new Date(Math.max(start.getTime(), dayStart.getTime()));
+        const segEnd = new Date(Math.min(end.getTime(), dayEnd.getTime()));
+        if (segEnd.getTime() <= segStart.getTime()) continue;
+
+        entries.push(`${fmtTime(segStart)}-${fmtTime(segEnd)}`);
+      }
+
+      const uniq = Array.from(new Set(entries)).sort();
+      days.push({ dayDate, entries: uniq });
+    }
+
+    return days;
+  }
+
+  function exportWeeklyOfficeHoursTxt() {
+    const weekLabel = fmtWeekRange(displayedWeekStart)
+      .replaceAll("/", "-")
+      .replaceAll(" ", "");
+    const lines = [];
+
+    lines.push(`Office Hours Report`);
+    lines.push(`Week: ${fmtWeekRange(displayedWeekStart)}`);
+    lines.push(``);
+
+    for (const l of leaders) {
+      let totalMin = 0;
+      const rawSessions = (sessionsThisWeek || []).filter(
+        (s) => !s.excludeFromTotals && s.leaderId === l.id && s.checkInTime?.toDate?.()
+      );
+
+      for (const s of rawSessions) {
+        const start = s.checkInTime.toDate();
+        const end = s.checkOutTime?.toDate?.() || new Date(now);
+        totalMin += minutesBetween(start, end);
+      }
+
+      lines.push(`${l.role || l.id} - ${minutesToNiceLong(totalMin)}`)
+      lines.push(`${scheduledNiceForLeader(l.id)}`);
+      
+      const days = actualTimesByDayForLeader(l.id);
+      const hadAny = days.some((d) => d.entries.length > 0);
+
+      if (!hadAny) {
+        lines.push(`- (no sessions recorded this week)`);
+      } else {
+        for (const d of days) {
+          if (d.entries.length === 0) continue;
+          lines.push(`- ${fmtDateLong(d.dayDate)} : ${d.entries.join(", ")}`);
+        }
+      }
+
+      lines.push(``);
+    }
+
+    downloadText(`office-hours-${weekLabel}.txt`, lines.join("\n"));
+  }
+
   if (!authReady) return null;
 
   if (!user) {
@@ -396,7 +603,13 @@ export default function Dashboard() {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="email"
               autoComplete="username"
-              style={{ width: "94%", padding: 10, fontSize: 16, borderRadius: 10, border: "1px solid #ddd" }}
+              style={{
+                width: "94%",
+                padding: 10,
+                fontSize: 16,
+                borderRadius: 10,
+                border: "1px solid #ddd",
+              }}
             />
             <input
               type="password"
@@ -441,7 +654,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100 }}>
+    <div style={{ padding: 24 }}>
       <h1>Dashboard</h1>
 
       <button
@@ -478,7 +691,11 @@ export default function Dashboard() {
               return (
                 <li key={l.id} style={{ marginBottom: 10, fontSize: 16 }}>
                   <b>{l.role || l.id}</b>{" "}
-                  {checkInDate ? <span>· {msToNice(durMs)}</span> : <span>· (loading check-in time…)</span>}
+                  {checkInDate ? (
+                    <span>· {msToNice(durMs)}</span>
+                  ) : (
+                    <span>· (loading check-in time…)</span>
+                  )}
                 </li>
               );
             })}
@@ -539,23 +756,45 @@ export default function Dashboard() {
             >
               next →
             </button>
+
+            <button
+              onClick={exportWeeklyOfficeHoursTxt}
+              style={{
+                padding: "6px 10px",
+                borderRadius: 8,
+                border: "1px solid #ddd",
+                background: "transparent",
+                cursor: "pointer",
+                fontWeight: 700,
+              }}
+            >
+              export week (.txt)
+            </button>
           </div>
         </div>
 
-        {/* Seamless grid: one vertical scroller, right side horizontal scroller */}
+        {/* outer wrapper must NOT be overflow hidden or sticky breaks */}
         <div
           style={{
             marginTop: 14,
             border: "1px solid #eee",
             borderRadius: 12,
-            overflow: "hidden",
-            background: "white",
+            overflow: "visible",
+            background: "transparent",
           }}
         >
-          <div style={{ maxHeight: 520, overflowY: "auto" }}>
-            <div style={{ display: "grid", gridTemplateColumns: `${LEFT_W}px 1fr` }}>
+          {/* inner wrapper keeps rounded corners */}
+          <div
+            style={{
+              borderRadius: 12,
+              overflow: "hidden",
+              background: "white",
+            }}
+          >
+            <div style={{ display: "grid", gridTemplateColumns: `${LEFT_W}px minmax(0, 1fr)` }}>
               {/* LEFT PANE (frozen) */}
               <div style={{ borderRight: "1px solid #eee", boxSizing: "border-box" }}>
+                <div style={{ height: 14, borderBottom: "1px solid #eee", background: "white" }} />
                 <div
                   style={{
                     height: HEADER_H,
@@ -566,7 +805,7 @@ export default function Dashboard() {
                     borderBottom: "1px solid #eee",
                     boxSizing: "border-box",
                     position: "sticky",
-                    top: 0,
+                    top: 14,
                     zIndex: 20,
                     background: "white",
                   }}
@@ -601,7 +840,8 @@ export default function Dashboard() {
                           {l.role || l.id}
                         </div>
                         <div style={{ fontSize: 12, opacity: 0.75, whiteSpace: "nowrap" }}>
-                          Today: {minutesToNice(totals.todayMinutes)} · Week: {minutesToNice(totals.weekMinutes)}
+                          Today: {minutesToNice(totals.todayMinutes)} · Week:{" "}
+                          {minutesToNice(totals.weekMinutes)}
                         </div>
                       </div>
                     </div>
@@ -609,152 +849,192 @@ export default function Dashboard() {
                 })}
               </div>
 
-              {/* RIGHT PANE (horizontal scroll) */}
-              <div style={{ overflowX: "auto" }}>
-                <div style={{ minWidth: WEEK_W }}>
-                  {/* timeline header */}
-                  <div
-                    style={{
-                      position: "sticky",
-                      top: 0,
-                      zIndex: 15,
-                      background: "white",
-                      height: HEADER_H,
-                      borderBottom: "1px solid #eee",
-                      boxSizing: "border-box",
-                    }}
-                  >
-                    {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].map((d, i) => {
-                      const left = i * DAY_SPAN_MIN * PX_PER_MIN;
+              {/* RIGHT PANE (top+main+bottom horizontal scroll, synced) */}
+              <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                {/* TOP horizontal scrollbar */}
+                <div
+                  ref={topHScrollRef}
+                  onScroll={(e) => syncHScroll("top", e.currentTarget.scrollLeft)}
+                  style={{
+                    overflowX: "auto",
+                    overflowY: "hidden",
+                    height: 14,
+                    borderBottom: "1px solid #eee",
+                  }}
+                >
+                  <div style={{ width: WEEK_W, height: 1 }} />
+                </div>
+
+                {/* MAIN timeline scroller */}
+                <div
+                  ref={mainHScrollRef}
+                  onScroll={(e) => syncHScroll("main", e.currentTarget.scrollLeft)}
+                  style={{ overflowX: "auto" }}
+                >
+                  <div style={{ minWidth: WEEK_W }}>
+                    {/* timeline header */}
+                    <div
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 15,
+                        background: "white",
+                        height: HEADER_H,
+                        borderBottom: "1px solid #eee",
+                        boxSizing: "border-box",
+                      }}
+                    >
+                      {["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"].map((d, i) => {
+                        const left = i * DAY_SPAN_MIN * PX_PER_MIN;
+                        return (
+                          <div
+                            key={d}
+                            style={{
+                              position: "absolute",
+                              left,
+                              top: 10,
+                              width: DAY_SPAN_MIN * PX_PER_MIN,
+                              textAlign: "center",
+                              fontWeight: 800,
+                              opacity: 0.85,
+                            }}
+                          >
+                            {d}
+                          </div>
+                        );
+                      })}
+
+                      {Array.from({ length: 6 }).map((_, i) => {
+                        const x = i * DAY_SPAN_MIN * PX_PER_MIN;
+                        return (
+                          <div
+                            key={`sep-${i}`}
+                            style={{
+                              position: "absolute",
+                              left: x,
+                              top: 0,
+                              bottom: 0,
+                              width: 1,
+                              background: "rgba(0,0,0,0.06)",
+                            }}
+                          />
+                        );
+                      })}
+                    </div>
+
+                    {/* timeline rows */}
+                    {leaders.map((l) => {
+                      const sched = (officeHoursByLeader[l.id] || []).filter(
+                        (b) => Number(b.dayOfWeek) >= 1 && Number(b.dayOfWeek) <= 5
+                      );
+
+                      const leaderSessions = sessionsByLeader[l.id] || [];
+                      const activeSessionTs = activeSessions[l.id]?.checkInTime;
+                      const activeStart = activeSessionTs?.toDate?.() || null;
+
+                      const combined = [...leaderSessions];
+                      if (l.isActive && activeStart) {
+                        const hasSame = combined.some(
+                          (s) => s.start.getTime() === activeStart.getTime()
+                        );
+                        if (!hasSame) combined.push({ id: "__active__", start: activeStart, end: null });
+                      }
+
                       return (
                         <div
-                          key={d}
+                          key={l.id}
                           style={{
-                            position: "absolute",
-                            left,
-                            top: 10,
-                            width: DAY_SPAN_MIN * PX_PER_MIN,
-                            textAlign: "center",
-                            fontWeight: 800,
-                            opacity: 0.85,
+                            position: "relative",
+                            height: ROW_H,
+                            borderBottom: "1px solid #f3f3f3",
+                            boxSizing: "border-box",
                           }}
                         >
-                          {d}
+                          {/* hour ticks */}
+                          {Array.from({ length: 5 * 13 }).map((_, idx) => {
+                            const dayIdx = Math.floor(idx / 13);
+                            const hourIdx = idx % 13;
+                            const x = (dayIdx * DAY_SPAN_MIN + hourIdx * 60) * PX_PER_MIN;
+                            return (
+                              <div
+                                key={`tick-${l.id}-${idx}`}
+                                style={{
+                                  position: "absolute",
+                                  left: x,
+                                  top: 0,
+                                  bottom: 0,
+                                  width: 1,
+                                  background:
+                                    hourIdx === 0 ? "rgba(0,0,0,0.08)" : "rgba(0,0,0,0.04)",
+                                }}
+                              />
+                            );
+                          })}
+
+                          {/* scheduled outline boxes */}
+                          {sched.map((b) => {
+                            const { left, width } = blockForSchedule(
+                              Number(b.dayOfWeek),
+                              Number(b.startMinute),
+                              Number(b.endMinute)
+                            );
+                            return (
+                              <div
+                                key={b.id}
+                                title="scheduled"
+                                style={{
+                                  position: "absolute",
+                                  left,
+                                  top: 6,
+                                  height: ROW_H - 12,
+                                  width,
+                                  border: "2px solid rgba(25,118,210,0.75)",
+                                  borderRadius: 10,
+                                  boxSizing: "border-box",
+                                  pointerEvents: "none",
+                                }}
+                              />
+                            );
+                          })}
+
+                          {/* actual session fill blocks */}
+                          {combined
+                            .flatMap((s) => sessionSegments(s.start, s.end))
+                            .map((seg) => (
+                              <div
+                                key={`${l.id}-${seg.key}`}
+                                title="in office"
+                                style={{
+                                  position: "absolute",
+                                  left: seg.left,
+                                  top: 8,
+                                  height: ROW_H - 16,
+                                  width: seg.width,
+                                  background: "rgba(46, 125, 50, 0.25)",
+                                  border: "1px solid rgba(46, 125, 50, 0.35)",
+                                  borderRadius: 10,
+                                  pointerEvents: "none",
+                                }}
+                              />
+                            ))}
                         </div>
                       );
                     })}
-
-                    {Array.from({ length: 6 }).map((_, i) => {
-                      const x = i * DAY_SPAN_MIN * PX_PER_MIN;
-                      return (
-                        <div
-                          key={`sep-${i}`}
-                          style={{
-                            position: "absolute",
-                            left: x,
-                            top: 0,
-                            bottom: 0,
-                            width: 1,
-                            background: "rgba(0,0,0,0.06)",
-                          }}
-                        />
-                      );
-                    })}
                   </div>
+                </div>
 
-                  {/* timeline rows */}
-                  {leaders.map((l) => {
-                    const sched = (officeHoursByLeader[l.id] || []).filter(
-                      (b) => Number(b.dayOfWeek) >= 1 && Number(b.dayOfWeek) <= 5
-                    );
-
-                    const leaderSessions = sessionsByLeader[l.id] || [];
-                    const activeSessionTs = activeSessions[l.id]?.checkInTime;
-                    const activeStart = activeSessionTs?.toDate?.() || null;
-
-                    const combined = [...leaderSessions];
-                    if (l.isActive && activeStart) {
-                      const hasSame = combined.some((s) => s.start.getTime() === activeStart.getTime());
-                      if (!hasSame) combined.push({ id: "__active__", start: activeStart, end: null });
-                    }
-
-                    return (
-                      <div
-                        key={l.id}
-                        style={{
-                          position: "relative",
-                          height: ROW_H,
-                          borderBottom: "1px solid #f3f3f3",
-                          boxSizing: "border-box",
-                        }}
-                      >
-                        {/* hour ticks */}
-                        {Array.from({ length: 5 * 13 }).map((_, idx) => {
-                          const dayIdx = Math.floor(idx / 13);
-                          const hourIdx = idx % 13;
-                          const x = (dayIdx * DAY_SPAN_MIN + hourIdx * 60) * PX_PER_MIN;
-                          return (
-                            <div
-                              key={`tick-${l.id}-${idx}`}
-                              style={{
-                                position: "absolute",
-                                left: x,
-                                top: 0,
-                                bottom: 0,
-                                width: 1,
-                                background: hourIdx === 0 ? "rgba(0,0,0,0.08)" : "rgba(0,0,0,0.04)",
-                              }}
-                            />
-                          );
-                        })}
-
-                        {/* scheduled outline boxes */}
-                        {sched.map((b) => {
-                          const { left, width } = blockForSchedule(
-                            Number(b.dayOfWeek),
-                            Number(b.startMinute),
-                            Number(b.endMinute)
-                          );
-                          return (
-                            <div
-                              key={b.id}
-                              title="scheduled"
-                              style={{
-                                position: "absolute",
-                                left,
-                                top: 6,
-                                height: ROW_H - 12,
-                                width,
-                                border: "2px solid rgba(25,118,210,0.75)",
-                                borderRadius: 10,
-                                boxSizing: "border-box",
-                                pointerEvents: "none",
-                              }}
-                            />
-                          );
-                        })}
-
-                        {/* actual session fill blocks */}
-                        {combined.flatMap((s) => sessionSegments(s.start, s.end)).map((seg) => (
-                          <div
-                            key={`${l.id}-${seg.key}`}
-                            title="in office"
-                            style={{
-                              position: "absolute",
-                              left: seg.left,
-                              top: 8,
-                              height: ROW_H - 16,
-                              width: seg.width,
-                              background: "rgba(46, 125, 50, 0.25)",
-                              border: "1px solid rgba(46, 125, 50, 0.35)",
-                              borderRadius: 10,
-                              pointerEvents: "none",
-                            }}
-                          />
-                        ))}
-                      </div>
-                    );
-                  })}
+                {/* BOTTOM horizontal scrollbar */}
+                <div
+                  ref={bottomHScrollRef}
+                  onScroll={(e) => syncHScroll("bottom", e.currentTarget.scrollLeft)}
+                  style={{
+                    overflowX: "auto",
+                    overflowY: "hidden",
+                    height: 14,
+                    borderTop: "1px solid #eee",
+                  }}
+                >
+                  <div style={{ width: WEEK_W, height: 1 }} />
                 </div>
               </div>
             </div>

@@ -217,7 +217,7 @@ export default function Kiosk() {
     <div style={{ padding: 24, textAlign: "center", background: "var(--bg)", minHeight: "100vh", color: "var(--text)" }}>
       <div style={{ maxWidth: 1600, margin: "0 auto" }}>
       
-      <h1 style={{ marginTop: 0 }}>Office Hours Check In</h1>
+      <h1 style={{ marginTop: 0 }}>Student Leader Check In</h1>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 16, marginTop: 12, alignItems: "start" }}>
         {/* left: buttons */}

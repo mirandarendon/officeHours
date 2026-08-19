@@ -75,29 +75,18 @@ function fmtTime(d) {
   return `${pad2(h)}:${pad2(m)}${ampm}`;
 }
 
-function fmtDateLong(d) {
-  return d.toLocaleDateString(undefined, {
-    weekday: "long",
-    month: "2-digit",
-    day: "2-digit",
-    year: "numeric",
-  });
+function hourLabelShort(minuteOfDay) {
+  const h24 = Math.floor(minuteOfDay / 60);
+  const ampm = h24 >= 12 ? "pm" : "am";
+  let h12 = h24 % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12}${ampm}`;
 }
 
-function downloadText(filename, text) {
-  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-function minutesBetween(a, b) {
-  return Math.max(0, (b.getTime() - a.getTime()) / 60000);
+function minuteOfDayToDate(baseDate, minuteOfDay) {
+  const d = new Date(baseDate);
+  d.setHours(Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0, 0);
+  return d;
 }
 
 function minutesToNiceLong(mins) {
@@ -172,10 +161,9 @@ export default function Dashboard() {
 
   const activeSessionUnsubsRef = useRef({});
 
-  // horizontal scroll refs (top + main + bottom)
+  // horizontal scroll refs (top + main, synced)
   const topHScrollRef = useRef(null);
   const mainHScrollRef = useRef(null);
-  const bottomHScrollRef = useRef(null);
   const syncingHScrollRef = useRef(false);
 
   function syncHScroll(from, left) {
@@ -184,8 +172,6 @@ export default function Dashboard() {
 
     if (from !== "top" && topHScrollRef.current) topHScrollRef.current.scrollLeft = left;
     if (from !== "main" && mainHScrollRef.current) mainHScrollRef.current.scrollLeft = left;
-    if (from !== "bottom" && bottomHScrollRef.current)
-      bottomHScrollRef.current.scrollLeft = left;
 
     requestAnimationFrame(() => {
       syncingHScrollRef.current = false;
@@ -407,9 +393,13 @@ export default function Dashboard() {
   const DAY_SPAN_MIN = GRID_END_MIN - GRID_START_MIN; // 720
   const PX_PER_MIN = 1.2; // tweak zoom
   const ROW_H = 44;
-  const HEADER_H = 44;
+  const HEADER_H = 60;
   const LEFT_W = 260;
   const WEEK_W = DAY_SPAN_MIN * PX_PER_MIN * 5;
+  const TIME_MARKS_MIN = Array.from(
+    { length: DAY_SPAN_MIN / 120 + 1 },
+    (_, i) => GRID_START_MIN + i * 120
+  ); // every 2 hours
 
   const officeHoursByLeader = useMemo(() => {
     const map = {};
@@ -546,47 +536,95 @@ export default function Dashboard() {
     return days;
   }
 
-  function exportWeeklyOfficeHoursTxt() {
-    const weekLabel = fmtWeekRange(displayedWeekStart)
-      .replaceAll("/", "-")
-      .replaceAll(" ", "");
-    const lines = [];
+  function scheduledBlocksForLeader(leaderId) {
+    return (officeHoursByLeader[leaderId] || []).filter(
+      (b) => Number(b.dayOfWeek) >= 1 && Number(b.dayOfWeek) <= 5
+    );
+  }
 
-    lines.push(`Office Hours Report`);
-    lines.push(`Week: ${fmtWeekRange(displayedWeekStart)}`);
-    lines.push(``);
+  function expectedMinutesForLeader(leaderId) {
+    return scheduledBlocksForLeader(leaderId).reduce(
+      (sum, b) => sum + Math.max(0, Number(b.endMinute) - Number(b.startMinute)),
+      0
+    );
+  }
 
-    for (const l of leaders) {
-      let totalMin = 0;
-      const rawSessions = (sessionsThisWeek || []).filter(
-        (s) => !s.excludeFromTotals && s.leaderId === l.id && s.checkInTime?.toDate?.()
-      );
+  // null = no schedule set (N/A). Otherwise: total logged minutes >= total expected minutes.
+  function isHoursMetForLeader(leaderId) {
+    const blocks = scheduledBlocksForLeader(leaderId);
+    if (blocks.length === 0) return null;
 
-      for (const s of rawSessions) {
-        const start = s.checkInTime.toDate();
-        const end = s.checkOutTime?.toDate?.() || new Date(now);
-        totalMin += minutesBetween(start, end);
-      }
+    const totals = rowTotals[leaderId] || { weekMinutes: 0 };
+    return totals.weekMinutes >= expectedMinutesForLeader(leaderId);
+  }
 
-      lines.push(`${l.role || l.id} - ${minutesToNiceLong(totalMin)}`)
-      lines.push(`${scheduledNiceForLeader(l.id)}`);
-      
+  // null = no schedule set (N/A). Otherwise: false only if a scheduled block has
+  // zero overlapping sessions — extra time outside a block doesn't count against it.
+  function isOnScheduleForLeader(leaderId) {
+    const blocks = scheduledBlocksForLeader(leaderId);
+    if (blocks.length === 0) return null;
+
+    const leaderSessions = sessionsByLeader[leaderId] || [];
+
+    return blocks.every((b) => {
+      const dayIdx = Number(b.dayOfWeek) - 1;
+      const dayDate = addDays(displayedWeekStart, dayIdx);
+      const blockStart = minuteOfDayToDate(dayDate, Number(b.startMinute));
+      const blockEnd = minuteOfDayToDate(dayDate, Number(b.endMinute));
+
+      return leaderSessions.some((s) => {
+        const sStart = s.start;
+        const sEnd = s.end || new Date(now);
+        return sStart.getTime() < blockEnd.getTime() && sEnd.getTime() > blockStart.getTime();
+      });
+    });
+  }
+
+  async function exportWeeklyOfficeHoursPdf() {
+    const { buildWeeklyReportPdf } = await import("../lib/weeklyReportPdf");
+
+    const weekLabel = fmtWeekRange(displayedWeekStart);
+    const filename = `office-hours-${weekLabel.replaceAll("/", "-").replaceAll(" ", "")}.pdf`;
+    const generatedAt = `Generated ${new Date().toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    })}`;
+
+    const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri"];
+
+    const pdfLeaders = leaders.map((l) => {
+      const blocks = scheduledBlocksForLeader(l.id);
+      const totals = rowTotals[l.id] || { weekMinutes: 0 };
       const days = actualTimesByDayForLeader(l.id);
-      const hadAny = days.some((d) => d.entries.length > 0);
 
-      if (!hadAny) {
-        lines.push(`- (no sessions recorded this week)`);
-      } else {
-        for (const d of days) {
-          if (d.entries.length === 0) continue;
-          lines.push(`- ${fmtDateLong(d.dayDate)} : ${d.entries.join(", ")}`);
-        }
-      }
+      return {
+        role: l.role || l.id,
+        subtitle:
+          blocks.length === 0
+            ? "No office hours scheduled"
+            : `Expected ${scheduledNiceForLeader(l.id)} · ${minutesToNiceLong(
+                expectedMinutesForLeader(l.id)
+              )}/week`,
+        hoursMet: isHoursMetForLeader(l.id),
+        onSchedule: isOnScheduleForLeader(l.id),
+        totalLabel: minutesToNiceLong(totals.weekMinutes),
+        sessions: days.flatMap((d, dayIdx) =>
+          d.entries.map((time) => ({ day: dayNames[dayIdx], time }))
+        ),
+      };
+    });
 
-      lines.push(``);
-    }
+    const doc = buildWeeklyReportPdf({
+      weekLabel,
+      generatedAt,
+      leaders: pdfLeaders,
+      filename,
+    });
 
-    downloadText(`office-hours-${weekLabel}.txt`, lines.join("\n"));
+    doc.save(filename);
   }
 
   if (!authReady) return null;
@@ -758,7 +796,7 @@ export default function Dashboard() {
             </button>
 
             <button
-              onClick={exportWeeklyOfficeHoursTxt}
+              onClick={exportWeeklyOfficeHoursPdf}
               style={{
                 padding: "6px 10px",
                 borderRadius: 8,
@@ -768,7 +806,7 @@ export default function Dashboard() {
                 fontWeight: 700,
               }}
             >
-              export week (.txt)
+              export week (.pdf)
             </button>
           </div>
         </div>
@@ -892,10 +930,11 @@ export default function Dashboard() {
                             style={{
                               position: "absolute",
                               left,
-                              top: 10,
+                              top: 6,
                               width: DAY_SPAN_MIN * PX_PER_MIN,
                               textAlign: "center",
                               fontWeight: 800,
+                              fontSize: 13,
                               opacity: 0.85,
                             }}
                           >
@@ -903,6 +942,25 @@ export default function Dashboard() {
                           </div>
                         );
                       })}
+
+                      {Array.from({ length: 5 }).flatMap((_, dayIdx) =>
+                        TIME_MARKS_MIN.map((mins) => (
+                          <div
+                            key={`time-${dayIdx}-${mins}`}
+                            style={{
+                              position: "absolute",
+                              left: minuteToX(dayIdx, mins),
+                              top: 32,
+                              transform: "translateX(-50%)",
+                              fontSize: 10,
+                              opacity: 0.6,
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {hourLabelShort(mins)}
+                          </div>
+                        ))
+                      )}
 
                       {Array.from({ length: 6 }).map((_, i) => {
                         const x = i * DAY_SPAN_MIN * PX_PER_MIN;
@@ -1021,20 +1079,6 @@ export default function Dashboard() {
                       );
                     })}
                   </div>
-                </div>
-
-                {/* BOTTOM horizontal scrollbar */}
-                <div
-                  ref={bottomHScrollRef}
-                  onScroll={(e) => syncHScroll("bottom", e.currentTarget.scrollLeft)}
-                  style={{
-                    overflowX: "auto",
-                    overflowY: "hidden",
-                    height: 14,
-                    borderTop: "1px solid #eee",
-                  }}
-                >
-                  <div style={{ width: WEEK_W, height: 1 }} />
                 </div>
               </div>
             </div>

@@ -1,0 +1,83 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function isKiosk() {
+      return signedIn() &&
+        exists(/databases/$(database)/documents/kiosks/$(request.auth.uid));
+    }
+
+    function isStaff() {
+      return isAdmin() || isKiosk();
+    }
+
+    match /leaders/{leaderId} {
+      // kiosk + admin can read leaders (kiosk needs to show buttons)
+      allow read: if isStaff();
+
+      // kiosk can ONLY flip these fields (clock in/out)
+      // admin can ONLY edit these fields (position management)
+      allow update: if
+        (isStaff() &&
+          request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly(["isActive", "currentSessionId"])) ||
+        (isAdmin() &&
+          request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly(["role", "order"]));
+
+      // only admin can create/delete leaders
+      allow create, delete: if isAdmin();
+    }
+
+    match /sessions/{sessionId} {
+      // kiosk + admin can read sessions (dashboard totals)
+      allow read: if isStaff();
+
+      // clock in (create a session)
+      allow create: if isStaff() &&
+        request.resource.data.keys().hasAll(["leaderId", "checkInTime"]) &&
+        request.resource.data.checkOutTime == null;
+
+      // clock out / autoclose (only allow these fields to change)
+      allow update: if isStaff() &&
+        request.resource.data.leaderId == resource.data.leaderId &&
+        request.resource.data.diff(resource.data).changedKeys()
+          .hasOnly(["checkOutTime", "durationMinutes", "autoClosed", "excludeFromTotals"]);
+
+      allow delete: if false;
+    }
+
+    // lock down role collections so ONLY admins can manage them
+    match /admins/{uid} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /kiosks/{uid} {
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /officeHours/{blockId} {
+      // dashboard + kiosk can read (so the grid can show schedule)
+      allow read: if isStaff();
+
+      // only admins can create/update/delete schedule blocks
+      allow create, update, delete: if isAdmin();
+    }
+
+    // everything else denied
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

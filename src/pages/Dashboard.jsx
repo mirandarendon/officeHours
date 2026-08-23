@@ -1,8 +1,42 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { db } from "../firebase";
-import { collection, doc, onSnapshot, query, where, Timestamp, getDocs, getDoc, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  where,
+  Timestamp,
+  getDocs,
+  getDoc,
+  updateDoc,
+  addDoc,
+  deleteDoc,
+} from "firebase/firestore";
 import { getAuth, onAuthStateChanged, signInWithEmailAndPassword } from "firebase/auth";
 import DashboardLock from "./DashboardLock";
+
+const btnSm = {
+  fontSize: 13,
+  padding: "6px 10px",
+  borderRadius: 8,
+  border: "1px solid #ddd",
+  background: "white",
+  color: "var(--text)",
+  cursor: "pointer",
+};
+const btnPrimary = { fontWeight: 700, background: "var(--primary)", borderColor: "var(--primary)", color: "white" };
+const btnDanger = { fontWeight: 700, background: "var(--primary-hover)", borderColor: "var(--primary-hover)", color: "white" };
+const popoverLabel = { fontSize: 11, opacity: 0.75, display: "block", marginBottom: 3 };
+const popoverInput = {
+  padding: "6px 7px",
+  borderRadius: 7,
+  border: "1px solid #ddd",
+  background: "white",
+  fontSize: 13,
+  width: "100%",
+  boxSizing: "border-box",
+};
 
 function startOfDay(date = new Date()) {
   const d = new Date(date);
@@ -89,6 +123,17 @@ function minuteOfDayToDate(baseDate, minuteOfDay) {
   return d;
 }
 
+function timeStrToMinutes(str) {
+  const [hh, mm] = (str || "").split(":").map((x) => parseInt(x, 10));
+  if (Number.isNaN(hh) || Number.isNaN(mm)) return null;
+  return hh * 60 + mm;
+}
+
+function minutesToTimeStr(mins) {
+  const m = Math.max(0, Math.round(mins));
+  return `${pad2(Math.floor(m / 60))}:${pad2(m % 60)}`;
+}
+
 function minutesToNiceLong(mins) {
   const m = Math.max(0, Math.round(mins));
   const h = Math.floor(m / 60);
@@ -158,6 +203,9 @@ export default function Dashboard() {
 
   const [weekOffset, setWeekOffset] = useState(0);
   const [officeHours, setOfficeHours] = useState([]);
+
+  // { leaderId, sessionId (null = new), day, start, end, err, confirmDelete, wasOpen, anchorRect }
+  const [popover, setPopover] = useState(null);
 
   const activeSessionUnsubsRef = useRef({});
 
@@ -428,6 +476,122 @@ export default function Dashboard() {
     }
     return map;
   }, [sessionsThisWeek]);
+
+  function openAddPopover(leader, dayIdx0to4, e) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickedMin = Math.round(clickX / PX_PER_MIN / 15) * 15 + GRID_START_MIN;
+    const startMin = Math.max(GRID_START_MIN, Math.min(GRID_END_MIN - 60, clickedMin));
+
+    setPopover({
+      leaderId: leader.id,
+      sessionId: null,
+      day: dayIdx0to4 + 1,
+      start: minutesToTimeStr(startMin),
+      end: minutesToTimeStr(startMin + 60),
+      err: "",
+      confirmDelete: false,
+      wasOpen: false,
+      anchorRect: { top: rect.top, bottom: rect.bottom, left: e.clientX },
+    });
+  }
+
+  function openEditPopover(leader, session, targetEl) {
+    if (!session.id) return; // real doc id not resolved yet
+
+    const rect = targetEl.getBoundingClientRect();
+    const dayIdx0 = Math.round(
+      (startOfDay(session.start).getTime() - displayedWeekStart.getTime()) / 86400000
+    );
+    const day = Math.max(1, Math.min(5, dayIdx0 + 1));
+
+    setPopover({
+      leaderId: leader.id,
+      sessionId: session.id,
+      day,
+      start: minutesToTimeStr(minutesSinceMidnight(session.start)),
+      end: session.end ? minutesToTimeStr(minutesSinceMidnight(session.end)) : "",
+      err: "",
+      confirmDelete: false,
+      wasOpen: !session.end,
+      anchorRect: { top: rect.top, bottom: rect.bottom, left: rect.left },
+    });
+  }
+
+  async function savePopoverSession() {
+    if (!popover) return;
+
+    const startMin = timeStrToMinutes(popover.start);
+    if (startMin == null) return setPopover((p) => ({ ...p, err: "Invalid check-in time." }));
+
+    const keepOpen = popover.wasOpen && !popover.end;
+    let endMin = null;
+    if (!keepOpen) {
+      endMin = timeStrToMinutes(popover.end);
+      if (endMin == null) return setPopover((p) => ({ ...p, err: "Check-out time is required." }));
+      if (endMin <= startMin)
+        return setPopover((p) => ({ ...p, err: "Check-out must be after check-in." }));
+    }
+
+    const dayDate = addDays(displayedWeekStart, popover.day - 1);
+    const checkIn = minuteOfDayToDate(dayDate, startMin);
+    const checkOut = keepOpen ? null : minuteOfDayToDate(dayDate, endMin);
+    const durationMinutes = checkOut
+      ? Math.max(0, Math.round((checkOut.getTime() - checkIn.getTime()) / 60000))
+      : null;
+
+    try {
+      if (!popover.sessionId) {
+        await addDoc(collection(db, "sessions"), {
+          leaderId: popover.leaderId,
+          checkInTime: Timestamp.fromDate(checkIn),
+          checkOutTime: checkOut ? Timestamp.fromDate(checkOut) : null,
+          durationMinutes,
+        });
+      } else {
+        await updateDoc(doc(db, "sessions", popover.sessionId), {
+          checkInTime: Timestamp.fromDate(checkIn),
+          checkOutTime: checkOut ? Timestamp.fromDate(checkOut) : null,
+          durationMinutes,
+          autoClosed: false,
+          excludeFromTotals: false,
+        });
+
+        // closing out what was the leader's open session — clear their active pointer too
+        if (popover.wasOpen && checkOut) {
+          const leader = leaders.find((x) => x.id === popover.leaderId);
+          if (leader?.currentSessionId === popover.sessionId) {
+            await updateDoc(doc(db, "leaders", popover.leaderId), {
+              isActive: false,
+              currentSessionId: null,
+            });
+          }
+        }
+      }
+      setPopover(null);
+    } catch (err) {
+      setPopover((p) => ({ ...p, err: err?.message || "Failed to save." }));
+    }
+  }
+
+  async function deletePopoverSession() {
+    if (!popover?.sessionId) return;
+
+    try {
+      await deleteDoc(doc(db, "sessions", popover.sessionId));
+
+      const leader = leaders.find((x) => x.id === popover.leaderId);
+      if (leader?.currentSessionId === popover.sessionId) {
+        await updateDoc(doc(db, "leaders", popover.leaderId), {
+          isActive: false,
+          currentSessionId: null,
+        });
+      }
+      setPopover(null);
+    } catch (err) {
+      setPopover((p) => ({ ...p, err: err?.message || "Failed to delete." }));
+    }
+  }
 
   function minuteToX(dayIdx0to4, minuteOfDay) {
     const within = clamp(minuteOfDay, GRID_START_MIN, GRID_END_MIN) - GRID_START_MIN;
@@ -718,26 +882,47 @@ export default function Dashboard() {
         <h2 style={{ marginTop: 0 }}>In Office Right Now</h2>
 
         {activeLeaders.length === 0 ? (
-          <p>No one is currently in the office.</p>
+          <div style={{ fontSize: 13, fontStyle: "italic", opacity: 0.7 }}>
+            No one is currently in the office.
+          </div>
         ) : (
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {activeLeaders.map((l) => {
               const checkInTs = activeSessions[l.id]?.checkInTime;
               const checkInDate = checkInTs?.toDate?.() || null;
               const durMs = checkInDate ? now - checkInDate.getTime() : 0;
 
               return (
-                <li key={l.id} style={{ marginBottom: 10, fontSize: 16 }}>
-                  <b>{l.role || l.id}</b>{" "}
-                  {checkInDate ? (
-                    <span>· {msToNice(durMs)}</span>
-                  ) : (
-                    <span>· (loading check-in time…)</span>
-                  )}
-                </li>
+                <div
+                  key={l.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "8px 12px",
+                    background: "var(--panel)",
+                    border: "1px solid var(--border)",
+                    borderRadius: 999,
+                    fontSize: 13.5,
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 8,
+                      height: 8,
+                      borderRadius: "50%",
+                      background: "#2e7d32",
+                      flexShrink: 0,
+                    }}
+                  />
+                  <b>{l.role || l.id}</b>
+                  <span style={{ opacity: 0.7, fontVariantNumeric: "tabular-nums" }}>
+                    {checkInDate ? msToNice(durMs) : "loading…"}
+                  </span>
+                </div>
               );
             })}
-          </ul>
+          </div>
         )}
       </div>
 
@@ -995,7 +1180,12 @@ export default function Dashboard() {
                         const hasSame = combined.some(
                           (s) => s.start.getTime() === activeStart.getTime()
                         );
-                        if (!hasSame) combined.push({ id: "__active__", start: activeStart, end: null });
+                        if (!hasSame)
+                          combined.push({
+                            id: activeSessions[l.id]?.sessionId || null,
+                            start: activeStart,
+                            end: null,
+                          });
                       }
 
                       return (
@@ -1055,13 +1245,45 @@ export default function Dashboard() {
                             );
                           })}
 
+                          {/* click empty space to add a session */}
+                          {Array.from({ length: 5 }).map((_, dayIdx) => (
+                            <div
+                              key={`add-${l.id}-${dayIdx}`}
+                              title="Click to add a session"
+                              onClick={(e) => openAddPopover(l, dayIdx, e)}
+                              style={{
+                                position: "absolute",
+                                left: minuteToX(dayIdx, GRID_START_MIN),
+                                top: 8,
+                                height: ROW_H - 16,
+                                width: DAY_SPAN_MIN * PX_PER_MIN,
+                                cursor: "copy",
+                                borderRadius: 10,
+                                boxSizing: "border-box",
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.background = "rgba(28,43,72,0.06)";
+                                e.currentTarget.style.border = "1px dashed rgba(28,43,72,0.3)";
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.background = "transparent";
+                                e.currentTarget.style.border = "none";
+                              }}
+                            />
+                          ))}
+
                           {/* actual session fill blocks */}
                           {combined
-                            .flatMap((s) => sessionSegments(s.start, s.end))
+                            .flatMap((s) => sessionSegments(s.start, s.end).map((seg) => ({ ...seg, session: s })))
                             .map((seg) => (
                               <div
                                 key={`${l.id}-${seg.key}`}
-                                title="in office"
+                                title={seg.session.id ? "In office — click to edit" : "In office"}
+                                onClick={
+                                  seg.session.id
+                                    ? (e) => openEditPopover(l, seg.session, e.currentTarget)
+                                    : undefined
+                                }
                                 style={{
                                   position: "absolute",
                                   left: seg.left,
@@ -1071,7 +1293,7 @@ export default function Dashboard() {
                                   background: "rgba(46, 125, 50, 0.25)",
                                   border: "1px solid rgba(46, 125, 50, 0.35)",
                                   borderRadius: 10,
-                                  pointerEvents: "none",
+                                  cursor: seg.session.id ? "pointer" : "default",
                                 }}
                               />
                             ))}
@@ -1086,9 +1308,150 @@ export default function Dashboard() {
         </div>
 
         <div style={{ marginTop: 10, opacity: 0.8, fontSize: 12 }}>
-          Outline = scheduled office hours. Green = actual time in office. Scroll horizontally to view the week.
+          Outline = scheduled office hours. Green = actual time in office. Click a session to edit it, or click empty space to add one. Scroll horizontally to view the week.
         </div>
       </div>
+
+      {popover && (
+        <SessionPopover
+          popover={popover}
+          setPopover={setPopover}
+          leaders={leaders}
+          onSave={savePopoverSession}
+          onDelete={deletePopoverSession}
+        />
+      )}
     </div>
+  );
+}
+
+function SessionPopover({ popover, setPopover, leaders, onSave, onDelete }) {
+  const leader = leaders.find((l) => l.id === popover.leaderId);
+  const isNew = !popover.sessionId;
+  const POPOVER_W = 240;
+  const top = popover.anchorRect.bottom + 6;
+  const left = Math.max(8, Math.min(popover.anchorRect.left, window.innerWidth - POPOVER_W - 8));
+
+  const backdrop = (
+    <div
+      onClick={() => setPopover(null)}
+      style={{ position: "fixed", inset: 0, zIndex: 49, background: "transparent" }}
+    />
+  );
+
+  const boxStyle = {
+    position: "fixed",
+    top,
+    left,
+    zIndex: 50,
+    width: POPOVER_W,
+    background: "white",
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    padding: 12,
+    boxShadow: "0 6px 18px rgba(20,30,55,0.18)",
+    boxSizing: "border-box",
+  };
+
+  if (popover.confirmDelete) {
+    return (
+      <>
+        {backdrop}
+        <div style={{ ...boxStyle, textAlign: "center" }}>
+          <div style={{ fontSize: 13, marginBottom: 10 }}>Delete this session?</div>
+          <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+            <button
+              onClick={() => setPopover((p) => ({ ...p, confirmDelete: false }))}
+              style={btnSm}
+            >
+              Cancel
+            </button>
+            <button onClick={onDelete} style={{ ...btnSm, ...btnDanger }}>
+              Yes, delete
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  return (
+    <>
+      {backdrop}
+      <div style={boxStyle}>
+        <div style={{ fontWeight: 700, fontSize: 12.5, marginBottom: 8 }}>
+          {leader?.role || popover.leaderId}
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <label style={popoverLabel}>Day</label>
+          <select
+            value={popover.day}
+            onChange={(e) => setPopover((p) => ({ ...p, day: Number(e.target.value) }))}
+            style={popoverInput}
+          >
+            <option value={1}>Mon</option>
+            <option value={2}>Tue</option>
+            <option value={3}>Wed</option>
+            <option value={4}>Thu</option>
+            <option value={5}>Fri</option>
+          </select>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+          <div style={{ flex: 1 }}>
+            <label style={popoverLabel}>Check in</label>
+            <input
+              type="time"
+              value={popover.start}
+              onChange={(e) => setPopover((p) => ({ ...p, start: e.target.value }))}
+              style={popoverInput}
+            />
+          </div>
+          <div style={{ flex: 1 }}>
+            <label style={popoverLabel}>Check out</label>
+            <input
+              type="time"
+              value={popover.end}
+              onChange={(e) => setPopover((p) => ({ ...p, end: e.target.value }))}
+              style={popoverInput}
+            />
+          </div>
+        </div>
+
+        {popover.wasOpen && (
+          <div style={{ fontSize: 11, opacity: 0.7, marginBottom: 8 }}>
+            Leave check out blank to keep them clocked in.
+          </div>
+        )}
+
+        {!!popover.err && (
+          <div style={{ fontSize: 12, color: "var(--primary-hover)", marginBottom: 8 }}>
+            {popover.err}
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
+          {isNew ? (
+            <span />
+          ) : (
+            <button
+              onClick={() => setPopover((p) => ({ ...p, confirmDelete: true }))}
+              style={{ ...btnSm, color: "var(--primary-hover)", borderColor: "var(--primary-hover)" }}
+            >
+              Delete
+            </button>
+          )}
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => setPopover(null)} style={btnSm}>
+              Cancel
+            </button>
+            <button onClick={onSave} style={{ ...btnSm, ...btnPrimary }}>
+              {isNew ? "Add" : "Save"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }

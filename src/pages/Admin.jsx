@@ -366,10 +366,6 @@ export default function Admin() {
   return (
     <div style={{ padding: 24, maxWidth: 1180 }}>
       <h1>Admin</h1>
-      <p style={{ marginTop: 0, opacity: 0.85 }}>
-        Manage positions — edit the title or order number, set weekly office hours, or remove a
-        position entirely.
-      </p>
 
       <button
         onClick={() => {

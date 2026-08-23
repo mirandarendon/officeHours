@@ -42,18 +42,28 @@ service cloud.firestore {
       // kiosk + admin can read sessions (dashboard totals)
       allow read: if isStaff();
 
-      // clock in (create a session)
-      allow create: if isStaff() &&
-        request.resource.data.keys().hasAll(["leaderId", "checkInTime"]) &&
-        request.resource.data.checkOutTime == null;
+      // kiosk: clock in (create a session with no checkout yet)
+      // admin: can also create a fully-formed historical session
+      allow create: if
+        (isStaff() &&
+          request.resource.data.keys().hasAll(["leaderId", "checkInTime"]) &&
+          request.resource.data.checkOutTime == null) ||
+        (isAdmin() &&
+          request.resource.data.keys().hasAll(["leaderId", "checkInTime"]));
 
-      // clock out / autoclose (only allow these fields to change)
-      allow update: if isStaff() &&
-        request.resource.data.leaderId == resource.data.leaderId &&
-        request.resource.data.diff(resource.data).changedKeys()
-          .hasOnly(["checkOutTime", "durationMinutes", "autoClosed", "excludeFromTotals"]);
+      // kiosk: clock out / autoclose (only these fields)
+      // admin: can also correct check-in/out times
+      allow update: if
+        (isStaff() &&
+          request.resource.data.leaderId == resource.data.leaderId &&
+          request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly(["checkOutTime", "durationMinutes", "autoClosed", "excludeFromTotals"])) ||
+        (isAdmin() &&
+          request.resource.data.leaderId == resource.data.leaderId &&
+          request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly(["checkInTime", "checkOutTime", "durationMinutes", "autoClosed", "excludeFromTotals"]));
 
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
 
     // lock down role collections so ONLY admins can manage them
